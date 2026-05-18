@@ -1,0 +1,3 @@
+[submodule "src/mini_stereo_vo"]
+	path = src/mini_stereo_vo
+	url = https://github.com/rdgldkthu/mini_stereo_vo
