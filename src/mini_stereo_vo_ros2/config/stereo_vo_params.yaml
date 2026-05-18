@@ -1,0 +1,8 @@
+stereo_vo_node:
+  ros__parameters:
+    image_transport: "raw"
+    odom_frame: "odom"
+    base_frame: "base_footprint"
+    camera_frame: "camera_link"
+    publish_path: true
+    reinit_on_failure: true
