@@ -6,3 +6,6 @@ stereo_vo_node:
     camera_frame: "camera_link"
     publish_path: true
     reinit_on_failure: true
+    # OAK-D stereo baseline (metres). Used when right camera_info P[3] is zero,
+    # which is the case with two independent Gazebo camera sensors.
+    baseline_m: 0.075

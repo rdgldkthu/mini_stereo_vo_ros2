@@ -123,11 +123,15 @@ public:
     declare_parameter("camera_frame", std::string("camera_link"));
     declare_parameter("publish_path", true);
     declare_parameter("reinit_on_failure", true);
+    // Override baseline (metres) when the right camera_info P[3] is zero,
+    // e.g. two independent monocular cameras in Gazebo simulation.
+    declare_parameter("baseline_m", 0.0);
 
     odom_frame_ = get_parameter("odom_frame").as_string();
     base_frame_ = get_parameter("base_frame").as_string();
     publish_path_ = get_parameter("publish_path").as_bool();
     reinit_on_failure_ = get_parameter("reinit_on_failure").as_bool();
+    baseline_override_m_ = get_parameter("baseline_m").as_double();
 
     pub_odom_ = create_publisher<nav_msgs::msg::Odometry>("/vo/odometry", 10);
     pub_pose_ = create_publisher<geometry_msgs::msg::PoseStamped>("/vo/pose", 10);
@@ -142,15 +146,18 @@ public:
         std::bind(&StereoVONode::imageCb, this,
                   std::placeholders::_1, std::placeholders::_2));
 
-    // Latch camera info once from each side
+    // Use sensor-data QoS (best-effort, volatile) to match ros_gz_bridge output.
+    // Transient-local would work with a true latched publisher but the bridge
+    // publishes volatile, causing a QoS incompatibility warning.
+    auto cam_info_qos = rclcpp::SensorDataQoS();
     left_info_sub_ = create_subscription<sensor_msgs::msg::CameraInfo>(
-        "/left/camera_info", rclcpp::QoS(1).transient_local(),
+        "/left/camera_info", cam_info_qos,
         [this](sensor_msgs::msg::CameraInfo::SharedPtr msg) {
           if (!left_info_) left_info_ = msg;
           tryInitCamera();
         });
     right_info_sub_ = create_subscription<sensor_msgs::msg::CameraInfo>(
-        "/right/camera_info", rclcpp::QoS(1).transient_local(),
+        "/right/camera_info", cam_info_qos,
         [this](sensor_msgs::msg::CameraInfo::SharedPtr msg) {
           if (!right_info_) right_info_ = msg;
           tryInitCamera();
@@ -173,7 +180,12 @@ private:
     camera_.cx = left_info_->k[2];
     camera_.cy = left_info_->k[5];
     // right CameraInfo P[3] = -fx * baseline  (Tx in pixels)
-    camera_.baseline = -right_info_->p[3] / camera_.fx;
+    if (baseline_override_m_ > 0.0) {
+      camera_.baseline = baseline_override_m_;
+    } else {
+      // P[3] = -fx * baseline for the right camera in a standard stereo pair
+      camera_.baseline = -right_info_->p[3] / camera_.fx;
+    }
 
     for (int r = 0; r < 3; ++r)
       for (int c = 0; c < 4; ++c) {
@@ -385,8 +397,25 @@ private:
   // Publishing
   // ---------------------------------------------------------------------------
   void publishPose(const Eigen::Matrix4d &T_wc) {
-    const Eigen::Vector3d t = T_wc.block<3, 1>(0, 3);
-    const Eigen::Quaterniond q(T_wc.block<3, 3>(0, 0));
+    // The VO world frame is the camera optical frame at initialisation:
+    //   cam-optical: Z forward, X right, Y down
+    // ROS odom / base_link convention: X forward, Y left, Z up
+    // This fixed rotation converts camera-optical coords to ROS body coords.
+    // It matches the base_link → oakd_left_camera_optical_frame TF (transposed):
+    //   rpy = (-90°, 0°, -90°) → R_opt_from_bl = [[0,0,1],[-1,0,0],[0,-1,0]]
+    //   ⟹  R_odom_from_cam = R_opt_from_bl^T  = [[0,-1,0],[0,0,-1],[1,0,0]]
+    // Equivalently (verified from TF at runtime):
+    //   cam Z → odom X  (forward → forward)
+    //   cam X → odom -Y (right   → -left  )
+    //   cam Y → odom -Z (down    → -up    )
+    static const Eigen::Matrix3d R_odom_from_cam =
+        (Eigen::Matrix3d() <<  0,  0,  1,
+                              -1,  0,  0,
+                               0, -1,  0).finished();
+
+    const Eigen::Vector3d t    = R_odom_from_cam * T_wc.block<3,1>(0,3);
+    const Eigen::Quaterniond q(R_odom_from_cam * T_wc.block<3,3>(0,0) *
+                                R_odom_from_cam.transpose());
 
     // Odometry
     nav_msgs::msg::Odometry odom;
@@ -482,15 +511,15 @@ private:
     svo::Frontend::Options o;
     o.keyframe_translation_threshold_m          = 1.5;
     o.keyframe_rotation_threshold_deg           = 12.0;
-    o.keyframe_min_tracked_points               = 60;
+    o.keyframe_min_tracked_points               = 20;
     o.keyframe_min_frame_gap                    = 5;
     o.keyframe_low_track_translation_threshold_m = 0.5;
-    o.min_pose_inliers                          = 15;
+    o.min_pose_inliers                          = 8;
     o.min_pose_inlier_ratio                     = 0.10;
     o.max_frame_translation_m                   = 2.0;
     o.min_reinit_frame_gap                      = 10;
-    o.weak_track_threshold                      = 80;
-    o.emergency_rejected_poses_count            = 2;
+    o.weak_track_threshold                      = 30;
+    o.emergency_rejected_poses_count            = 3;
     o.local_ba_keyframe_interval                = 2;
     return o;
   }
@@ -523,6 +552,7 @@ private:
   std::string base_frame_;
   bool        publish_path_;
   bool        reinit_on_failure_;
+  double      baseline_override_m_  = 0.0;
 
   sensor_msgs::msg::CameraInfo::SharedPtr left_info_;
   sensor_msgs::msg::CameraInfo::SharedPtr right_info_;
