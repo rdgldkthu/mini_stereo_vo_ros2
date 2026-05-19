@@ -105,16 +105,7 @@ This single command launches:
 
 ### 2 — Drive the robot
 
-Both driving scripts use only VO odometry (`/vo/odometry`) and `/cmd_vel` — no Nav2 or `map` frame required.
-
-**Timed square loop** — fixed duration per side, no pose feedback:
-
-```bash
-# in a second terminal
-source install/setup.bash
-python3 scripts/drive_square.py          # 1.5 m square, 0.3 m/s
-python3 scripts/drive_square.py --side 1.0 --loops 3   # smaller, 3 laps
-```
+The driving script uses only VO odometry (`/vo/odometry`) and `/cmd_vel` — no Nav2 or `map` frame required.
 
 **Odometry-based waypoints** — P-controller closes the loop on VO pose:
 
@@ -227,7 +218,6 @@ The rest of the tree comes from `robot_state_publisher` and the TurtleBot4 URDF.
 | Script | Description |
 |--------|-------------|
 | `scripts/bag2tum.py` | Convert ROS 2 bag to TUM format and run evo APE. `--vo-topic`, `--gt-topic`, `--results-dir` flags. |
-| `scripts/drive_square.py` | Drive robot in a square via `/cmd_vel` (no Nav2). `--side`, `--speed`, `--turn-speed`, `--loops` flags. |
 | `scripts/run_waypoints.py` | Drive a configurable waypoint sequence using VO odometry feedback + direct `/cmd_vel` P-controller. `--odom-topic` flag. |
 | `scripts/cmd_vel_relay.py` | Relay `/cmd_vel` between namespaces for multi-robot or bridge testing. |
 | `scripts/gen_readme_images.py` | Regenerate `docs/images/` from scratch using matplotlib. |
