@@ -129,6 +129,8 @@ Edit the `WAYPOINTS` list at the top of the script to change the route.
 
 Watch the orange `/vo/path` trail grow in RViz2 as the robot moves.
 
+![RViz2 — run_waypoints](docs/images/rviz_run_waypoints.png)
+
 ### 4 — Record a bag
 
 ```bash
