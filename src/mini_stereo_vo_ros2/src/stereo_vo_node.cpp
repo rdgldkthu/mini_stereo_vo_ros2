@@ -126,12 +126,15 @@ public:
     // Override baseline (metres) when the right camera_info P[3] is zero,
     // e.g. two independent monocular cameras in Gazebo simulation.
     declare_parameter("baseline_m", 0.0);
+    // EMA smoothing for published pose: 0=no smoothing, 1=locked at origin.
+    declare_parameter("pose_smooth_alpha", 0.4);
 
     odom_frame_ = get_parameter("odom_frame").as_string();
     base_frame_ = get_parameter("base_frame").as_string();
     publish_path_ = get_parameter("publish_path").as_bool();
     reinit_on_failure_ = get_parameter("reinit_on_failure").as_bool();
     baseline_override_m_ = get_parameter("baseline_m").as_double();
+    pose_smooth_alpha_ = get_parameter("pose_smooth_alpha").as_double();
 
     pub_odom_ = create_publisher<nav_msgs::msg::Odometry>("/vo/odometry", 10);
     pub_pose_ = create_publisher<geometry_msgs::msg::PoseStamped>("/vo/pose", 10);
@@ -164,6 +167,17 @@ public:
         });
 
     path_msg_.header.frame_id = odom_frame_;
+
+    // Publish an empty path on startup so RViz2 clears any stale display from a prior run.
+    auto clear_timer = create_wall_timer(std::chrono::milliseconds(500), [this]() {
+      nav_msgs::msg::Path empty;
+      empty.header.stamp = now();
+      empty.header.frame_id = odom_frame_;
+      pub_path_->publish(empty);
+      clear_timer_->cancel();
+    });
+    clear_timer_ = clear_timer;
+
     RCLCPP_INFO(get_logger(), "Waiting for camera info on /left/camera_info and /right/camera_info ...");
   }
 
@@ -375,10 +389,18 @@ private:
           auto kf_backup  = map_.activeKeyframes();
           auto lm_backup  = map_.activeLandmarks();
 
+          const Eigen::Vector3d pose_before = frontend_.currentPose().block<3,1>(0,3);
+
           svo::LocalBAResult ba = estimator_.runLocalBundleAdjustment(
               map_.mutableActiveKeyframes(), map_.mutableActiveLandmarks(), camera_);
 
-          if (ba.success && ba.rmse_after > 0.0 && ba.rmse_after <= ba.rmse_before) {
+          const Eigen::Vector3d pose_after = map_.activeKeyframes().empty()
+              ? pose_before
+              : map_.activeKeyframes().back().pose_wc.block<3,1>(0,3);
+          const double ba_shift = (pose_after - pose_before).norm();
+
+          if (ba.success && ba.rmse_after > 0.0 && ba.rmse_after <= ba.rmse_before
+              && ba_shift < 0.15) {
             frontend_.refreshActiveLandmarksFromMap(map_.activeLandmarks());
             frontend_.noteLocalBaAccepted();
           } else {
@@ -413,9 +435,16 @@ private:
                               -1,  0,  0,
                                0, -1,  0).finished();
 
-    const Eigen::Vector3d t    = R_odom_from_cam * T_wc.block<3,1>(0,3);
+    Eigen::Vector3d t    = R_odom_from_cam * T_wc.block<3,1>(0,3);
     const Eigen::Quaterniond q(R_odom_from_cam * T_wc.block<3,3>(0,0) *
                                 R_odom_from_cam.transpose());
+
+    // EMA on position only — damps PnP frame-to-frame noise without lagging rotation.
+    if (smooth_initialized_) {
+      t = pose_smooth_alpha_ * t + (1.0 - pose_smooth_alpha_) * t_smooth_;
+    }
+    t_smooth_ = t;
+    smooth_initialized_ = true;
 
     // Odometry
     nav_msgs::msg::Odometry odom;
@@ -516,7 +545,7 @@ private:
     o.keyframe_low_track_translation_threshold_m = 0.5;
     o.min_pose_inliers                          = 8;
     o.min_pose_inlier_ratio                     = 0.10;
-    o.max_frame_translation_m                   = 2.0;
+    o.max_frame_translation_m                   = 0.12;
     o.min_reinit_frame_gap                      = 10;
     o.weak_track_threshold                      = 30;
     o.emergency_rejected_poses_count            = 3;
@@ -553,6 +582,10 @@ private:
   bool        publish_path_;
   bool        reinit_on_failure_;
   double      baseline_override_m_  = 0.0;
+  double      pose_smooth_alpha_    = 0.4;
+
+  Eigen::Vector3d t_smooth_         = Eigen::Vector3d::Zero();
+  bool            smooth_initialized_ = false;
 
   sensor_msgs::msg::CameraInfo::SharedPtr left_info_;
   sensor_msgs::msg::CameraInfo::SharedPtr right_info_;
@@ -570,6 +603,8 @@ private:
 
   rclcpp::Subscription<sensor_msgs::msg::CameraInfo>::SharedPtr left_info_sub_;
   rclcpp::Subscription<sensor_msgs::msg::CameraInfo>::SharedPtr right_info_sub_;
+
+  rclcpp::TimerBase::SharedPtr clear_timer_;
 
   tf2_ros::TransformBroadcaster tf_broadcaster_;
 };
