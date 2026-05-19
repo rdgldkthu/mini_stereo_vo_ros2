@@ -142,9 +142,9 @@ def gen_architecture() -> None:
          GR_F, GR_E, ts=8.5, ss=7.5)
 
     _box(ax, 5.3, 2.3, 4.6, 1.6,
-         "Nav2 — run_waypoints.py",
-         "BasicNavigator · 1 m × 1 m square\n"
-         "/vo/odometry in · /cmd_vel out",
+         "run_waypoints.py",
+         "VO odom feedback · P-controller\n"
+         "/cmd_vel out",
          RO_F, RO_E)
 
     _box(ax, 13.0, 2.3, 4.4, 1.6,
@@ -168,11 +168,11 @@ def gen_architecture() -> None:
     # (4) vo_topics bottom → evo top  [label to the right to avoid evo edge]
     _arr(ax, 13.0, 3.5, 13.0, 3.1, "via bag", GRAY, 6.8, ldx=0.9)
 
-    # (5) vo_topics left-side → Nav2 right edge  [/vo/odometry for Nav2]
-    _arr(ax, 10.8, 4.6, 7.6, 2.3, "/vo/odometry", RO_E, 6.8)
-
-    # (6) Nav2 top → Bridge bottom  [/cmd_vel up to bridge]
+    # (5) run_waypoints.py top → Bridge bottom  [/cmd_vel up to bridge]
     _arr(ax, 5.3, 3.1, 7.3, 6.2, "/cmd_vel", BR_E, 6.8, rad=-0.15)
+
+    # (6) Published Topics bottom-left → run_waypoints.py right  [/vo/odometry feedback]
+    _arr(ax, 10.8, 3.5, 7.6, 2.6, "/vo/odometry", OU_E, 7.0, lt=0.5, ldy=-0.3)
 
     # (7) Bridge left → Gazebo right  [/cmd_vel forwarded to DiffDrive]
     _arr(ax, 6.8, 6.7, 5.6, 6.7, "", BR_E)
@@ -201,7 +201,7 @@ PIPELINE_STAGES = [
      "left + right\nmono8",
      GZ_F, GZ_E),
     ("Stereo\nInitializer",
-     "ORB detect\nSGM match\ntriangulate ≥20",
+     "ORB detect\nBF match\ntriangulate ≥20",
      RO_F, RO_E),
     ("KLT\nTracker",
      "optical flow\n21×21 win\n3 pyr · bidir check",
