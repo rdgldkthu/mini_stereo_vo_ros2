@@ -143,8 +143,91 @@ Visualization Manager:
       Show Names: true
       Tree:
         odom:
-          base_footprint:
-            {}
+          base_link:
+            base_footprint:
+              {}
+            bump_front_center:
+              {}
+            bump_front_left:
+              {}
+            bump_front_right:
+              {}
+            bump_left:
+              {}
+            bump_right:
+              {}
+            bumper:
+              {}
+            button_1:
+              {}
+            button_2:
+              {}
+            button_power:
+              {}
+            cliff_front_left:
+              {}
+            cliff_front_right:
+              {}
+            cliff_side_left:
+              {}
+            cliff_side_right:
+              {}
+            front_caster_link:
+              {}
+            front_left_bottom_weight_block:
+              {}
+            front_left_top_weight_block:
+              {}
+            front_right_bottom_weight_block:
+              {}
+            front_right_top_weight_block:
+              {}
+            imu_link:
+              {}
+            ir_intensity_front_center_left:
+              {}
+            ir_intensity_front_center_right:
+              {}
+            ir_intensity_front_left:
+              {}
+            ir_intensity_front_right:
+              {}
+            ir_intensity_left:
+              {}
+            ir_intensity_right:
+              {}
+            ir_intensity_side_left:
+              {}
+            ir_omni:
+              {}
+            mouse:
+              {}
+            shell_link:
+              front_left_tower_standoff:
+                {}
+              front_right_tower_standoff:
+                {}
+              oakd_camera_bracket:
+                oakd_link:
+                  oakd_imu_frame:
+                    {}
+                  oakd_left_camera_frame:
+                    oakd_left_camera_optical_frame:
+                      {}
+                  oakd_rgb_camera_frame:
+                    oakd_rgb_camera_optical_frame:
+                      {}
+                  oakd_right_camera_frame:
+                    oakd_right_camera_optical_frame:
+                      {}
+              rear_left_tower_standoff:
+                {}
+              rear_right_tower_standoff:
+                {}
+              rplidar_link:
+                {}
+              tower_sensor_plate:
+                {}
       Update Interval: 0
       Value: true
     - Alpha: 1
@@ -454,7 +537,7 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz_default_plugins/Orbit
-      Distance: 15.196666717529297
+      Distance: 13.22197437286377
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1
@@ -469,10 +552,10 @@ Visualization Manager:
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Pitch: 0.4553980827331543
+      Pitch: 0.24539810419082642
       Target Frame: <Fixed Frame>
       Value: Orbit (rviz_default_plugins)
-      Yaw: 1.1204100847244263
+      Yaw: 1.9004100561141968
     Saved: ~
 Window Geometry:
   Displays:
