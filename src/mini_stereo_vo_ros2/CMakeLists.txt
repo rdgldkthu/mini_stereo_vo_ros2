@@ -39,13 +39,14 @@ install(TARGETS stereo_vo_node
   DESTINATION lib/${PROJECT_NAME}
 )
 
-install(DIRECTORY config launch rviz
+install(DIRECTORY config launch rviz urdf
   DESTINATION share/${PROJECT_NAME}
 )
 
 install(PROGRAMS
   ${CMAKE_CURRENT_SOURCE_DIR}/../../scripts/bag2tum.py
   ${CMAKE_CURRENT_SOURCE_DIR}/../../scripts/run_waypoints.py
+  ${CMAKE_CURRENT_SOURCE_DIR}/../../scripts/cmd_vel_relay.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
