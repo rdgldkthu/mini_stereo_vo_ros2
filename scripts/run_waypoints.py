@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import math
+import signal
 import threading
 from typing import List, Optional, Tuple
 
@@ -131,6 +132,13 @@ def main() -> None:
 
     rclpy.init()
     driver = WaypointDriver(odom_topic=args.odom_topic)
+
+    def _shutdown(sig, frame):
+        driver._stop()
+        rclpy.shutdown()
+
+    signal.signal(signal.SIGINT, _shutdown)
+    signal.signal(signal.SIGTERM, _shutdown)
 
     print(f"Waiting for odometry on '{args.odom_topic}'…")
     if not driver.wait_for_odom():

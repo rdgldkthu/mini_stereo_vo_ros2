@@ -14,9 +14,18 @@ from rosidl_runtime_py.utilities import get_message
 import rosbag2_py
 
 
+def _detect_storage_id(bag_path: str) -> str:
+    import glob
+    if glob.glob(os.path.join(bag_path, "*.mcap")):
+        return "mcap"
+    return "sqlite3"
+
+
 def open_reader(bag_path: str) -> rosbag2_py.SequentialReader:
     reader = rosbag2_py.SequentialReader()
-    storage_opts = rosbag2_py.StorageOptions(uri=bag_path, storage_id="sqlite3")
+    storage_opts = rosbag2_py.StorageOptions(
+        uri=bag_path, storage_id=_detect_storage_id(bag_path)
+    )
     convert_opts = rosbag2_py.ConverterOptions(
         input_serialization_format="cdr",
         output_serialization_format="cdr",
@@ -95,8 +104,8 @@ def main() -> None:
         "--vo-topic", default="/vo/odometry", help="VO odometry topic"
     )
     parser.add_argument(
-        "--gt-topic", default="/model/turtlebot4/pose",
-        help="Ground-truth pose topic (ros_gz_bridge PoseStamped)"
+        "--gt-topic", default="/model/turtlebot4/odometry",
+        help="Ground-truth Odometry topic (DiffDrive gz odometry, bridged from gz.msgs.Odometry)"
     )
     parser.add_argument(
         "--results-dir", default="results", help="Output directory"
@@ -111,17 +120,18 @@ def main() -> None:
         sys.exit(f"No VO data found in {args.bag_path} on {args.vo_topic}")
     write_tum(vo_tum_path, vo_lines)
 
-    gt_lines = read_pose_stamped_tum(args.bag_path, args.gt_topic)
+    gt_lines = read_odometry_tum(args.bag_path, args.gt_topic)
     if not gt_lines:
         print("[warn] No ground-truth data — skipping evo APE.", file=sys.stderr)
         return
     write_tum(gt_tum_path, gt_lines)
 
+    save_zip = str(Path(args.results_dir) / "ape_results.zip")
     cmd = [
         "evo_ape", "tum",
         gt_tum_path, vo_tum_path,
         "-p",
-        "--save_results", args.results_dir,
+        "--save_results", save_zip,
     ]
     print("Running:", " ".join(cmd))
     subprocess.run(cmd, check=True)

@@ -115,7 +115,24 @@ def generate_launch_description():
         output="screen",
     )
 
-    # ── 5. cmd_vel bridge: ROS /cmd_vel (Twist) → Gazebo /cmd_vel (Twist) ────
+    # ── 5. Ground-truth odometry bridge: DiffDrive gz odometry → ROS ────────
+    #    The DiffDrive plugin publishes gz.msgs.Odometry on this topic natively;
+    #    no extra plugins required.  In simulation, wheel odometry is perfect.
+    bridge_gt_pose = Node(
+        package="ros_gz_bridge",
+        executable="parameter_bridge",
+        name="bridge_gt_pose",
+        arguments=[
+            f"/model/{ROBOT}/odometry@nav_msgs/msg/Odometry[gz.msgs.Odometry",
+        ],
+        remappings=[
+            (f"/model/{ROBOT}/odometry", "/model/turtlebot4/odometry"),
+        ],
+        parameters=[{"use_sim_time": True}],
+        output="screen",
+    )
+
+    # ── 6. cmd_vel bridge: ROS /cmd_vel (Twist) → Gazebo /cmd_vel (Twist) ────
     #    The Gazebo-native DiffDrive plugin in our custom URDF subscribes to
     #    Gazebo /cmd_vel directly, bypassing the ros2_control chain entirely.
     bridge_cmd_vel = Node(
@@ -126,7 +143,7 @@ def generate_launch_description():
         output="screen",
     )
 
-    # ── 7. StereoVONode ────────────────────────────────────────────────────────
+    # ── 7. StereoVONode ───────────────────────────────────────────────────────
     stereo_vo_node = Node(
         package="mini_stereo_vo_ros2",
         executable="stereo_vo_node",
@@ -150,6 +167,7 @@ def generate_launch_description():
         robot_state_publisher,
         spawn_robot,
         bridge_stereo,
+        bridge_gt_pose,
         bridge_cmd_vel,
         stereo_vo_node,
         rviz_node,

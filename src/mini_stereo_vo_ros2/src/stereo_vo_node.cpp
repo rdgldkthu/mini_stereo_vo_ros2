@@ -1,9 +1,6 @@
 // mini_stereo_vo_ros2 — stereo_vo_node.cpp
-#include <algorithm>
-#include <deque>
 #include <memory>
 #include <string>
-#include <vector>
 
 #include <Eigen/Core>
 #include <Eigen/Geometry>
@@ -36,75 +33,6 @@ namespace {
 using SyncPolicy = message_filters::sync_policies::ApproximateTime<
     sensor_msgs::msg::Image, sensor_msgs::msg::Image>;
 
-std::vector<cv::Point2f>
-makeInitialActivePoints(const svo::StereoInitResult &r) {
-  std::vector<cv::Point2f> pts;
-  const size_t n = std::min(r.features.size(), r.landmarks.size());
-  pts.reserve(n);
-  for (size_t i = 0; i < n; ++i)
-    pts.push_back(r.features[i].kp_left.pt);
-  return pts;
-}
-
-std::vector<svo::MapPoint>
-makeInitialActiveLandmarks(const svo::StereoInitResult &r) {
-  std::vector<svo::MapPoint> lms;
-  const size_t n = std::min(r.features.size(), r.landmarks.size());
-  lms.reserve(n);
-  for (size_t i = 0; i < n; ++i) {
-    svo::MapPoint lm = r.landmarks[i];
-    lm.observed_times = 1;
-    lm.tracked_times = 1;
-    lm.missed_times = 0;
-    lm.is_outlier = false;
-    lm.is_active = true;
-    lms.push_back(lm);
-  }
-  return lms;
-}
-
-Eigen::Matrix4d makePoseWcFromPnP(const Eigen::Matrix3d &R_cw,
-                                  const Eigen::Vector3d &t_cw) {
-  Eigen::Matrix4d T = Eigen::Matrix4d::Identity();
-  T.block<3, 3>(0, 0) = R_cw.transpose();
-  T.block<3, 1>(0, 3) = -R_cw.transpose() * t_cw;
-  return T;
-}
-
-void makePoseCwFromPoseWc(const Eigen::Matrix4d &T_wc,
-                          Eigen::Matrix3d &R_cw, Eigen::Vector3d &t_cw) {
-  const Eigen::Matrix3d R_wc = T_wc.block<3, 3>(0, 0);
-  const Eigen::Vector3d t_wc = T_wc.block<3, 1>(0, 3);
-  R_cw = R_wc.transpose();
-  t_cw = -R_cw * t_wc;
-}
-
-void gatherPnPInliers(const std::vector<Eigen::Vector3d> &obj_pts,
-                      const std::vector<cv::Point2f> &img_pts,
-                      const std::vector<int> &inlier_idx,
-                      std::vector<Eigen::Vector3d> &out_obj,
-                      std::vector<cv::Point2f> &out_img) {
-  out_obj.clear();
-  out_img.clear();
-  for (const int i : inlier_idx) {
-    if (i < 0 || i >= static_cast<int>(obj_pts.size()))
-      continue;
-    out_obj.push_back(obj_pts[i]);
-    out_img.push_back(img_pts[i]);
-  }
-}
-
-std::vector<svo::MapPoint>
-transformLandmarksToWorld(const std::vector<svo::MapPoint> &local,
-                          const Eigen::Matrix4d &T_wc) {
-  auto world = local;
-  const Eigen::Matrix3d R = T_wc.block<3, 3>(0, 0);
-  const Eigen::Vector3d t = T_wc.block<3, 1>(0, 3);
-  for (auto &lm : world)
-    lm.p_w = R * lm.p_w + t;
-  return world;
-}
-
 } // namespace
 
 class StereoVONode : public rclcpp::Node {
@@ -132,7 +60,6 @@ public:
     odom_frame_ = get_parameter("odom_frame").as_string();
     base_frame_ = get_parameter("base_frame").as_string();
     publish_path_ = get_parameter("publish_path").as_bool();
-    reinit_on_failure_ = get_parameter("reinit_on_failure").as_bool();
     baseline_override_m_ = get_parameter("baseline_m").as_double();
     pose_smooth_alpha_ = get_parameter("pose_smooth_alpha").as_double();
 
@@ -245,173 +172,28 @@ private:
   }
 
   // ---------------------------------------------------------------------------
-  // VO pipeline (mirrors run_kitti.cpp)
+  // VO pipeline
   // ---------------------------------------------------------------------------
   void processFrame(svo::Frame &curr_frame) {
-    // First frame: stereo bootstrap
     if (!initialized_) {
-      const svo::StereoInitResult init = initializer_.run(curr_frame, camera_, false);
-      if (init.num_triangulated < 20) {
-        RCLCPP_WARN(get_logger(), "Stereo init failed (%d landmarks). Retrying...",
-                    init.num_triangulated);
+      if (!frontend_.bootstrap(curr_frame, initializer_, map_, camera_)) {
+        RCLCPP_WARN(get_logger(), "Bootstrap failed (too few landmarks). Retrying...");
         return;
       }
-
-      auto active_lms = makeInitialActiveLandmarks(init);
-      map_.assignNewLandmarkIds(active_lms);
-      frontend_.initialize(curr_frame, makeInitialActivePoints(init), active_lms);
-
-      curr_frame.pose_wc = Eigen::Matrix4d::Identity();
-      curr_frame.is_keyframe = true;
-      curr_frame.tracked_points = frontend_.activePoints();
-      for (const auto &lm : active_lms)
-        curr_frame.tracked_landmark_ids.push_back(lm.id);
-
-      map_.addKeyframe(curr_frame);
-      map_.setActiveLandmarks(active_lms);
-      frontend_.setPreviousFrame(curr_frame);
-
       initialized_ = true;
-      RCLCPP_INFO(get_logger(), "VO initialized with %d landmarks.", init.num_triangulated);
-      publishPose(curr_frame.pose_wc);
+      RCLCPP_INFO(get_logger(), "VO initialized with %zu active points.",
+                  frontend_.activePoints().size());
+      publishPose(frontend_.currentPose());
       return;
     }
 
-    // Track frame-to-frame
-    const svo::TrackResult track =
-        tracker_.trackFrameToFrame(frontend_.previousFrame(), curr_frame,
-                                   frontend_.activePoints(),
-                                   frontend_.activeLandmarks(), false);
+    const svo::ProcessFrameResult r =
+        frontend_.processFrame(curr_frame.id, curr_frame,
+                               tracker_, estimator_, initializer_, map_, camera_);
 
-    svo::FrontendFrameStats stats;
+    if (r.stats.reinitialized)
+      RCLCPP_WARN(get_logger(), "VO reinitialized at frame %d.", curr_frame.id);
 
-    // PnP + optional refinement
-    if (track.num_valid_correspondences >= estimator_opts_.min_pnp_points) {
-      Eigen::Matrix3d init_R_cw;
-      Eigen::Vector3d init_t_cw;
-      makePoseCwFromPoseWc(frontend_.currentPose(), init_R_cw, init_t_cw);
-
-      const svo::PoseEstimateResult raw =
-          estimator_.estimatePosePnPRansac(track.object_points, track.image_points,
-                                           camera_, init_R_cw, init_t_cw, true);
-
-      if (raw.success) {
-        svo::PoseEstimateResult final_pose = raw;
-
-        if (raw.num_inliers >= estimator_opts_.min_refine_inliers) {
-          std::vector<Eigen::Vector3d> inlier_obj;
-          std::vector<cv::Point2f> inlier_img;
-          gatherPnPInliers(track.object_points, track.image_points,
-                           raw.inlier_indices, inlier_obj, inlier_img);
-          const svo::PoseEstimateResult refined =
-              estimator_.refinePosePoseOnly(inlier_obj, inlier_img, camera_,
-                                            raw.rotation, raw.translation);
-          if (refined.success)
-            final_pose = refined;
-        }
-
-        const Eigen::Matrix4d candidate =
-            makePoseWcFromPnP(final_pose.rotation, final_pose.translation);
-        frontend_.acceptPose(curr_frame.id, raw.num_inliers,
-                             track.num_valid_correspondences, candidate, stats);
-      } else {
-        frontend_.rejectPose(curr_frame.id, track.num_valid_correspondences, stats);
-      }
-    } else {
-      frontend_.rejectPose(curr_frame.id, track.num_valid_correspondences, stats);
-    }
-
-    // Reinitialization
-    if (frontend_.shouldReinitialize(curr_frame.id, stats.pose_accepted,
-                                     static_cast<int>(track.curr_points.size()))) {
-      const svo::StereoInitResult reinit = initializer_.run(curr_frame, camera_, false);
-      if (reinit.num_triangulated >= 20) {
-        auto new_lms = makeInitialActiveLandmarks(reinit);
-        map_.assignNewLandmarkIds(new_lms);
-        new_lms = transformLandmarksToWorld(new_lms, frontend_.currentPose());
-        frontend_.setActiveTracks(makeInitialActivePoints(reinit), new_lms);
-        map_.setActiveLandmarks(new_lms);
-        frontend_.noteReinitialized(curr_frame.id);
-        stats.reinitialized = true;
-        RCLCPP_WARN(get_logger(), "VO reinitialized at frame %d.", curr_frame.id);
-      } else {
-        frontend_.setActiveTracks(track.curr_points, track.tracked_landmarks);
-      }
-    } else {
-      frontend_.setActiveTracks(track.curr_points, track.tracked_landmarks);
-    }
-
-    if (!stats.reinitialized) {
-      map_.markTrackedLandmarks(track.tracked_landmarks);
-      map_.markMissedLandmarks(track.landmark_ids);
-      map_.pruneLandmarks();
-    }
-
-    // Keyframe insertion
-    if (stats.pose_accepted) {
-      curr_frame.pose_wc = frontend_.currentPose();
-      curr_frame.tracked_points = frontend_.activePoints();
-      for (const auto &lm : frontend_.activeLandmarks())
-        curr_frame.tracked_landmark_ids.push_back(lm.id);
-
-      if (frontend_.needNewKeyframe(curr_frame.pose_wc,
-                                    static_cast<int>(frontend_.activePoints().size()),
-                                    curr_frame.id)) {
-        curr_frame.is_keyframe = true;
-        const svo::StereoInitResult kf_init =
-            initializer_.run(curr_frame, camera_, false);
-
-        if (kf_init.num_triangulated >= 20) {
-          auto new_lms = makeInitialActiveLandmarks(kf_init);
-          map_.assignNewLandmarkIds(new_lms);
-          new_lms = transformLandmarksToWorld(new_lms, curr_frame.pose_wc);
-
-          const auto new_pts = makeInitialActivePoints(kf_init);
-          curr_frame.tracked_points.insert(curr_frame.tracked_points.end(),
-                                           new_pts.begin(), new_pts.end());
-          for (const auto &lm : new_lms)
-            curr_frame.tracked_landmark_ids.push_back(lm.id);
-
-          map_.addKeyframe(curr_frame);
-          map_.addLandmarks(new_lms);
-          frontend_.setActiveTracks(new_pts, new_lms);
-        } else {
-          map_.addKeyframe(curr_frame);
-        }
-
-        frontend_.noteKeyframeInserted(curr_frame.id, curr_frame.pose_wc);
-        stats.inserted_keyframe = true;
-
-        // Local bundle adjustment
-        if (map_.numActiveKeyframes() >= 3 &&
-            map_.numActiveLandmarks() >= 20 &&
-            frontend_.shouldRunLocalBA()) {
-          auto kf_backup  = map_.activeKeyframes();
-          auto lm_backup  = map_.activeLandmarks();
-
-          const Eigen::Vector3d pose_before = frontend_.currentPose().block<3,1>(0,3);
-
-          svo::LocalBAResult ba = estimator_.runLocalBundleAdjustment(
-              map_.mutableActiveKeyframes(), map_.mutableActiveLandmarks(), camera_);
-
-          const Eigen::Vector3d pose_after = map_.activeKeyframes().empty()
-              ? pose_before
-              : map_.activeKeyframes().back().pose_wc.block<3,1>(0,3);
-          const double ba_shift = (pose_after - pose_before).norm();
-
-          if (ba.success && ba.rmse_after > 0.0 && ba.rmse_after <= ba.rmse_before
-              && ba_shift < 0.15) {
-            frontend_.refreshActiveLandmarksFromMap(map_.activeLandmarks());
-            frontend_.noteLocalBaAccepted();
-          } else {
-            map_.mutableActiveKeyframes() = kf_backup;
-            map_.mutableActiveLandmarks() = lm_backup;
-          }
-        }
-      }
-    }
-
-    frontend_.setPreviousFrame(curr_frame);
     publishPose(frontend_.currentPose());
   }
 
@@ -489,7 +271,7 @@ private:
   }
 
   // ---------------------------------------------------------------------------
-  // Module options (matching run_kitti.cpp defaults)
+  // Module options (matching run_kitti.cpp defaults, tuned for simulation)
   // ---------------------------------------------------------------------------
   static svo::StereoInitializer::Options makeStereoInitOptions() {
     svo::StereoInitializer::Options o;
@@ -525,14 +307,6 @@ private:
     o.pose_refine_epsilon             = 1e-6;
     o.pose_refine_huber_delta         = 5.0;
     o.min_refine_inliers              = 10;
-    o.local_ba_iterations             = 3;
-    o.local_ba_epsilon                = 1e-6;
-    o.local_ba_huber_delta            = 5.0;
-    o.local_ba_damping                = 1e-3;
-    o.max_ba_keyframes                = 3;
-    o.max_ba_landmarks                = 100;
-    o.min_ba_observations             = 20;
-    o.min_ba_landmark_observations    = 2;
     return o;
   }
 
@@ -549,7 +323,6 @@ private:
     o.min_reinit_frame_gap                      = 10;
     o.weak_track_threshold                      = 30;
     o.emergency_rejected_poses_count            = 3;
-    o.local_ba_keyframe_interval                = 2;
     return o;
   }
 
@@ -569,7 +342,6 @@ private:
   svo::StereoInitializer  initializer_;
   svo::Tracker            tracker_;
   svo::Estimator          estimator_;
-  svo::Estimator::Options estimator_opts_ = makeEstimatorOptions();
   svo::Frontend           frontend_;
   svo::Map                map_;
 
@@ -580,7 +352,6 @@ private:
   std::string odom_frame_;
   std::string base_frame_;
   bool        publish_path_;
-  bool        reinit_on_failure_;
   double      baseline_override_m_  = 0.0;
   double      pose_smooth_alpha_    = 0.4;
 
